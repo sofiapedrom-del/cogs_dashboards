@@ -95,6 +95,7 @@
   <nav class="tabs">
     <button data-tab="tabRev" class="on">Revenue &amp; COGS</button>
     <button data-tab="tabTox">Tox Memberships</button>
+    <button data-tab="tabDisc">Discounts</button>
     <button data-tab="tabTrends">Trends</button>
     <button data-tab="tabNuda">Nuda</button>
     <button data-tab="tabQBO">QBO vs Dashboard</button>
@@ -160,12 +161,13 @@
     <div class="card">
       <h2>Membership Status <span class="hint">from the Membership Tracker tab</span></h2>
       <div class="mini" id="toxMini"></div>
+      <div class="src" id="memSrc"></div>
     </div>
 
     <div class="card row2">
       <h2>Selected Period Activity <span class="hint" id="toxPeriodHint"></span></h2>
       <div class="mini" id="toxPeriodMini"></div>
-      <div class="src">Source: Category helper column on the Invoice tab. Member spend outside membership = revenue from clients with a Tox Member ID, excluding membership payments and upsells, matching the Tox tab definition.</div>
+      <div class="src" id="toxPeriodSrc">Source: Category helper column on the Invoice tab. Member spend outside membership = revenue from clients with a Tox Member ID, excluding membership payments and upsells, matching the Tox tab definition.</div>
     </div>
 
     <div class="card row2">
@@ -179,7 +181,7 @@
 
     <div class="grid g2b row2">
       <div class="card">
-        <h2>New Members vs Cancellations <span class="hint">from the Membership Tracker tab, start and cancel dates, with memberships billed</span></h2>
+        <h2>New Members vs Cancellations <span class="hint">2026, with memberships billed</span></h2>
         <canvas id="memChart"></canvas>
       </div>
       <div class="card">
@@ -197,6 +199,45 @@
         <h2>Tox Membership Economics <span class="hint">monthly membership revenue, COGS, labor and GPM</span></h2>
         <canvas id="toxEconChart"></canvas>
       </div>
+    </div>
+  </section>
+
+  <!-- =============== TAB: DISCOUNTS =============== -->
+  <section class="tab" id="tabDisc">
+    <div class="card">
+      <h2>Discount Summary <span class="hint" id="discHint"></span></h2>
+      <div class="mini" id="discMini"></div>
+      <div class="src" id="discSrc"></div>
+    </div>
+
+    <div class="grid g2 row2">
+      <div class="card">
+        <h2>Discounts by Service Line <span class="hint" id="discLineHint"></span></h2>
+        <table id="discLineTable">
+          <thead><tr><th>Line</th><th>Gross Revenue</th><th>Discounts</th><th>Discount Rate</th><th>Net Revenue</th><th>Discounted Items</th><th>Prior Period</th><th>Change</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="card">
+        <h2>Discount Mix <span class="hint">share of discount dollars</span></h2>
+        <canvas id="discMixChart"></canvas>
+      </div>
+    </div>
+
+    <div class="card row2">
+      <h2>Discounts by Month <span class="hint">dollars discounted and discount rate</span></h2>
+      <canvas id="discTrendChart"></canvas>
+    </div>
+
+    <div class="card row2">
+      <h2>Discounts by Month and Service Line <span class="hint">stacked discount dollars</span></h2>
+      <canvas id="discStackChart"></canvas>
+    </div>
+
+    <div class="card row2">
+      <h2>Month over Month Detail <span class="hint">discount dollars, with the discount rate underneath</span></h2>
+      <div style="overflow-x:auto"><table id="discMoMTable"><thead></thead><tbody></tbody></table></div>
+      <div class="src">Gross revenue = Total Due plus the discount applied to the same invoice line. Discount rate = discount dollars divided by gross revenue. Service lines follow the same taxonomy used on the Revenue &amp; COGS tab.</div>
     </div>
   </section>
 
@@ -305,6 +346,12 @@ DB.pnl={"months": ["2026-01", "2026-02", "2026-03", "2026-04", "2026-05", "2026-
 DB.taxfb={"2026-01": {"Esthetician": 1398.25, "Injectables": 0.0, "Other": 0.0, "Tox": 0.0, "Wellness": 14.53}, "2026-02": {"Esthetician": 1095.44, "Injectables": 0.0, "Other": 0.0, "Tox": 0.0, "Wellness": 13.86}, "2026-03": {"Esthetician": 1244.57, "Injectables": 0.0, "Other": 0.0, "Tox": 0.0, "Wellness": 7.49}, "2026-04": {"Esthetician": 1134.99, "Injectables": 0.0, "Other": 0.0, "Tox": 0.0, "Wellness": 214.65}, "2026-05": {"Esthetician": 1072.09, "Injectables": 0.0, "Other": 0.0, "Tox": 0.0, "Wellness": 397.58}, "2026-06": {"Esthetician": 892.34, "Injectables": 0.0, "Other": 0.0, "Tox": 0.0, "Wellness": 166.43}};
 DB.bh={"2026-01": 749.35, "2026-03": 1607.0, "2026-04": 1609.24, "2026-05": 249.0, "2026-06": 948.1};
 var C={};DB.cols.forEach(function(c,i){C[c]=i;});
+/* Discounts live in their own column so revenue stays net of discounts.
+   Snapshots taken before this column existed simply report zero until the
+   workbook is reloaded or the Google Sheet is synced. */
+if(C.disc==null){C.disc=DB.cols.length;DB.cols.push('disc');}
+function discOf(r){var v=r[C.disc];return v?Math.abs(v):0;}
+function hasDiscountData(){for(var i=0;i<DB.invoice.length;i++){if(discOf(DB.invoice[i]))return true;}return false;}
 (function(){var need=C.cid+1;DB.invoice.forEach(function(r){while(r.length<need)r.push('');});})();
 var TW={};DB.toxw_cols.forEach(function(c,i){TW[c]=i;});
 var TM={};DB.toxm_cols.forEach(function(c,i){TM[c]=i;});
@@ -567,100 +614,134 @@ function uniqueBilledByMonth(){
   return out;
 }
 function uniqueBilledFor(mk){var m=uniqueBilledByMonth();return m[mk]||0;}
-/* Membership Tracker aggregation. New members = tracker start dates,
-   cancellations = tracker cancel dates. This is the source of truth for
-   new members, cancellations and renewal statuses (Membership Tracker tab). */
-function trackerByMonth(){
-  var t={};
-  function bump(k,f){t[k]=t[k]||{nm:0,cn:0};t[k][f]++;}
-  DB.members.forEach(function(m){
-    if(m[MB.start])bump(monthKey(m[MB.start]),'nm');
-    if(m[MB.cancel])bump(monthKey(m[MB.cancel]),'cn');
-  });
-  return t;
-}
-function trackerForPeriod(pk){
-  var nm=0,cn=0;
-  DB.members.forEach(function(m){
-    var s=m[MB.start],c=m[MB.cancel];
-    if(s&&(mode==='month'?monthKey(s):sundayKey(s))===pk)nm++;
-    if(c&&(mode==='month'?monthKey(c):sundayKey(c))===pk)cn++;
-  });
-  return {nm:nm,cn:cn};
-}
 function renderToxMini(){
-  /* Normalize tracker statuses so spelling variants still count:
-     anything containing "cancel" is Cancelled, "pend"+"renew" is Pending
-     Renewal, any other "renew" (or "auto") is Autorenewed, the rest with a
-     non blank status is Active. */
-  function normStatus(s){
-    s=String(s||'').toLowerCase().replace(/[^a-z]/g,'');
-    if(!s)return '';
-    if(s.indexOf('cancel')>=0)return 'cancelled';
-    if(s.indexOf('pend')>=0&&s.indexOf('renew')>=0)return 'pending';
-    if(s.indexOf('renew')>=0||s.indexOf('auto')>=0)return 'auto';
-    return 'active';
-  }
-  var st={active:0,auto:0,pending:0,cancelled:0};
-  DB.members.forEach(function(m){
-    var n=normStatus(m[MB.status]);
-    if(n)st[n]++;
+  var st={};DB.members.forEach(function(m){st[m[MB.status]]=(st[m[MB.status]]||0)+1;});
+  /* Active = every Membership Tracker row (column G) whose status is not
+     'Cancelled'. Blank statuses are ignored so empty tracker rows do not
+     inflate the count. */
+  var active=0;DB.members.forEach(function(m){
+    var s=String(m[MB.status]||'').trim();
+    if(s&&s.toLowerCase()!=='cancelled')active++;
   });
-  var active=st.active+st.auto+st.pending;
   var mm=DB.toxm.filter(function(r){return (r[TM.billed]||0)>0;});
   var last=mm.length?mm[mm.length-1]:null;
   var lastMk=last?monthKey(last[TM.start]):null;
   var ub=lastMk?uniqueBilledFor(lastMk):0;
-  var tk=trackerByMonth();
-  var lastTk=lastMk&&tk[lastMk]?tk[lastMk]:{nm:0,cn:0};
   var cards=[
     ['Active Members',fmtN(active),'tracker, not cancelled'],
-    ['Autorenewed',fmtN(st.auto),'tracker status'],
-    ['Pending Renewal',fmtN(st.pending),'tracker status'],
-    ['Cancelled, All Time',fmtN(st.cancelled),'tracker status'],
+    ['Autorenewed',fmtN(st['Autorenewed']||0),''],
+    ['Pending Renewal',fmtN(st['Pending Renewal']||0),''],
+    ['Cancelled, All Time',fmtN(st['Cancelled']||0),''],
     ['Members Billed',lastMk?fmtN(ub):'\u2014',(lastMk?monthLabel(lastMk):'')+', unique client IDs'],
-    ['New Members',lastMk?fmtN(lastTk.nm):'\u2014',(lastMk?monthLabel(lastMk):'')+', tracker start dates']
+    ['New Members',last?fmtN(trackerNewInMonth(monthKey(last[TM.start]),last[TM.newtm])):'\u2014',last?monthLabel(monthKey(last[TM.start]))+', tracker start dates':'']
   ];
   document.getElementById('toxMini').innerHTML=cards.map(function(c){
     return '<div class="b"><div class="l">'+c[0]+'</div><div class="v">'+c[1]+'</div><div class="s">'+c[2]+'</div></div>';
   }).join('');
+  renderMemDiag();
+}
+/* Reports exactly what arrived from the Membership Tracker tab, so a column that
+   failed to load reads as a message instead of a silent zero. */
+var MEMERR=[];
+function colLetter(i){return (i>=0&&i<26)?String.fromCharCode(65+i):('index '+i);}
+function memErr(what,e){
+  MEMERR.push(what+' ('+((e&&e.message)?e.message:String(e))+')');
+  var el=document.getElementById('memSrc');
+  if(el)el.textContent=(el.textContent||'')+' Render issue: '+MEMERR.join('; ')+'.';
+}
+function renderMemDiag(){
+  var el=document.getElementById('memSrc');if(!el)return;
+  var withStatus=0,withStart=0,withCancel=0;
+  DB.members.forEach(function(m){
+    if(String(m[MB.status]==null?'':m[MB.status]).trim())withStatus++;
+    if(m[MB.start])withStart++;
+    if(m[MB.cancel])withCancel++;
+  });
+  var txt='Source: Membership Tracker tab. '+fmtN(DB.members.length)+' member rows loaded, '+
+    fmtN(withStatus)+' with a status, '+fmtN(withStart)+' with a start date, '+fmtN(withCancel)+' with a cancellation date.';
+  var d=DB.memdiag;
+  if(d&&d.map){
+    txt+=' Columns read: status '+colLetter(d.map.status.col)+' ('+d.map.status.how+'), start date '+
+      colLetter(d.map.start.col)+' ('+d.map.start.how+'), cancellation date '+colLetter(d.map.cancel.col)+' ('+d.map.cancel.how+').';
+  }
+  if(!DB.members.length){
+    txt+=' No rows were read. Confirm the tab is named exactly Membership Tracker and that column A holds the client IDs under a CID header, then sync again.';
+  }else if(!withStatus){
+    txt+=' No status values were read, so the four status counts show zero. The status column needs values such as Active, Autorenewed, Pending Renewal or Cancelled.';
+  }
+  if(MEMERR.length)txt+=' Render issue: '+MEMERR.join('; ')+'.';
+  el.textContent=txt;
+}
+/* ---- New and cancelled Tox members come from the Membership Tracker tab ----
+   Counts are driven by the Start Date and Cancellation Date columns, so the
+   weekly and the monthly views are measured the same way. The New Tox Member
+   flag on the Invoice tab is kept only as a reconciliation check. */
+function trackerCountBy(field,keyFn){
+  var o={};
+  DB.members.forEach(function(m){
+    var d=m[field];if(!d)return;
+    var k=keyFn(d);o[k]=(o[k]||0)+1;
+  });
+  return o;
+}
+function trackerHas(field){
+  for(var i=0;i<DB.members.length;i++){if(DB.members[i][field])return true;}
+  return false;
+}
+function periodKeyOf(dateStr){return mode==='month'?monthKey(dateStr):sundayKey(dateStr);}
+function trackerNewInPeriod(pk){return trackerCountBy(MB.start,periodKeyOf)[pk]||0;}
+function trackerCancelInPeriod(pk){return trackerCountBy(MB.cancel,periodKeyOf)[pk]||0;}
+function trackerNewInMonth(mk,fallback){
+  if(!trackerHas(MB.start))return fallback||0;
+  return trackerCountBy(MB.start,monthKey)[mk]||0;
+}
+function trackerCancelCell(mk,fallback){
+  if(!trackerHas(MB.cancel))return fallback!=null?fmtN(fallback):'\u2014';
+  return fmtN(trackerCountBy(MB.cancel,monthKey)[mk]||0);
 }
 function renderToxPeriod(pk){
   var rows=rowsInPeriod(pk);
-  var pay={rev:0,n:0},svc=0,ups=0,nonmem=0,spend=0;
+  var pay={rev:0,n:0},svc=0,ups=0,nonmem=0,spend=0,invnew=0;
   rows.forEach(function(r){
     if(r[C.cat]==='M'){pay.rev+=r[C.rev];pay.n++;}
     if(r[C.cat]==='S')svc++;
     if(r[C.cat]==='U')ups++;
     if(r[C.cat]==='N')nonmem++;
     if(r[C.toxmem]===1&&r[C.cat]!=='M'&&r[C.cat]!=='U')spend+=r[C.rev];
+    if(r[C.newtm]===1)invnew++;
   });
-  var tk=trackerForPeriod(pk);
+  var newtm=trackerNewInPeriod(pk),canc=trackerCancelInPeriod(pk);
   var cards=[
     ['Membership Payments',fmt0(pay.rev),fmtN(pay.n)+' payments'],
-    ['New Tox Members',fmtN(tk.nm),'tracker start dates'],
-    ['Cancellations',fmtN(tk.cn),'tracker cancel dates'],
+    ['New Tox Members',fmtN(newtm),fmtN(canc)+' cancellations in period'],
     ['Member Services',fmtN(svc),'visits under the plan'],
     ['TMX Upsells',fmtN(ups),'add ons to members'],
+    ['Non Member Services',fmtN(nonmem),'tox visits, no membership'],
     ['Member Spend Outside Membership',fmt0(spend),'excludes payments and upsells']
   ];
   document.getElementById('toxPeriodMini').innerHTML=cards.map(function(c){
     return '<div class="b"><div class="l">'+c[0]+'</div><div class="v">'+c[1]+'</div><div class="s">'+c[2]+'</div></div>';
   }).join('');
   document.getElementById('toxPeriodHint').textContent=periodTitle(pk);
+  var srcEl=document.getElementById('toxPeriodSrc');
+  if(srcEl){
+    var note='New Tox Members and cancellations come from the Membership Tracker tab, counted on Start Date and Cancellation Date. '+
+      'Membership payments, member services, upsells and non member services come from the Category helper column on the Invoice tab. '+
+      'Member spend outside membership = revenue from clients with a Tox Member ID, excluding membership payments and upsells, matching the Tox tab definition.';
+    if(invnew!==newtm)note+=' Reconciliation: the New Tox Member flag on the Invoice tab shows '+fmtN(invnew)+' for this period versus '+fmtN(newtm)+' tracker start dates.';
+    srcEl.textContent=note;
+  }
 }
 function renderToxMonTable(){
   var body='';
   var ubm=uniqueBilledByMonth();
-  var tk=trackerByMonth();
   DB.toxm.forEach(function(r){
     if((r[TM.totrev]||0)===0&&(r[TM.billed]||0)===0)return;
     var gpm=r[TM.gpm];
     var mk=monthKey(r[TM.start]);
     var billed=(ubm[mk]!=null)?ubm[mk]:(r[TM.billed]||0);
-    var t=tk[mk]||{nm:0,cn:0};
-    body+='<tr><td>'+monthLabel(mk)+'</td><td>'+fmtN(billed)+'</td><td>'+fmtN(t.nm)+
-      '</td><td>'+fmtN(t.cn)+'</td><td>'+fmt0(r[TM.memrev]||0)+'</td><td>'+fmtN(r[TM.memsvc]||0)+
+    body+='<tr><td>'+monthLabel(mk)+'</td><td>'+fmtN(billed)+'</td><td>'+fmtN(trackerNewInMonth(monthKey(r[TM.start]),r[TM.newtm]))+
+      '</td><td>'+trackerCancelCell(monthKey(r[TM.start]),r[TM.cancel])+'</td><td>'+fmt0(r[TM.memrev]||0)+'</td><td>'+fmtN(r[TM.memsvc]||0)+
       '</td><td>'+fmtN(r[TM.upselln]||0)+'</td><td>'+fmt0(r[TM.upsellrev]||0)+'</td><td>'+fmt0(r[TM.totrev]||0)+
       '</td><td>'+fmt0(r[TM.cogs]||0)+'</td><td>'+fmt0(r[TM.labor]||0)+'</td><td>'+(gpm!=null?fmtP(gpm):'')+
       '</td><td>'+fmt0(r[TM.exclrev]||0)+'</td></tr>';
@@ -671,13 +752,17 @@ function renderMemChart(){
   destroy('mem');
   var months={},order=[];
   var ubm2=uniqueBilledByMonth();
-  var tk=trackerByMonth();
   DB.toxm.forEach(function(r){
     var k=monthKey(r[TM.start]);
-    if((r[TM.billed]||0)>0||(r[TM.totrev]||0)>0){
-      var t=tk[k]||{nm:0,cn:0};
-      months[k]={nm:t.nm,cn:t.cn,billed:(ubm2[k]!=null?ubm2[k]:(r[TM.billed]||0))};order.push(k);
-    }
+    if((r[TM.billed]||0)>0||(r[TM.totrev]||0)>0){months[k]={nm:0,cn:0,billed:(ubm2[k]!=null?ubm2[k]:(r[TM.billed]||0))};order.push(k);}
+  });
+  DB.members.forEach(function(m){
+    if(m[MB.start]){var k=monthKey(m[MB.start]);if(months[k])months[k].nm++;}
+    if(m[MB.cancel]){var k2=monthKey(m[MB.cancel]);if(months[k2])months[k2].cn++;}
+  });
+  DB.toxm.forEach(function(r){
+    var k=monthKey(r[TM.start]);
+    if(months[k]&&r[TM.cancel]!=null&&!trackerHas(MB.cancel))months[k].cn=r[TM.cancel];
   });
   charts.mem=new Chart(document.getElementById('memChart'),{
     data:{labels:order.map(monthLabel),datasets:[
@@ -860,6 +945,145 @@ function renderNudaChart(){
   });
 }
 
+/* =============== TAB: DISCOUNTS =============== */
+/* Revenue on the Invoice tab is already net of discounts, so gross revenue is
+   rebuilt as net + discount. Discount rate is always measured against gross. */
+function discSeries(keyFn){
+  var g={},keys=[];
+  DB.invoice.forEach(function(r){
+    var k=keyFn(r[C.date]),l=lineOf(r),d=discOf(r);
+    if(!g[k]){g[k]={net:0,disc:0,n:0,lines:{}};keys.push(k);}
+    g[k].net+=r[C.rev];g[k].disc+=d;if(d)g[k].n++;
+    g[k].lines[l]=(g[k].lines[l]||0)+d;
+  });
+  return {keys:keys.sort(),g:g};
+}
+function discAgg(rows){
+  var m={},tot={net:0,disc:0,n:0};
+  rows.forEach(function(r){
+    var l=lineOf(r),d=discOf(r);
+    m[l]=m[l]||{net:0,disc:0,n:0};
+    m[l].net+=r[C.rev];m[l].disc+=d;if(d)m[l].n++;
+    tot.net+=r[C.rev];tot.disc+=d;if(d)tot.n++;
+  });
+  return {lines:m,tot:tot};
+}
+function discRate(x){var gross=x.net+x.disc;return gross?x.disc/gross:0;}
+function discEmpty(){
+  var msg='No discount column was found on the Invoice tab of the loaded data. '+
+    'Reload the workbook or sync the Google Sheet after adding a column named Discount to the Invoice tab, '+
+    'and this tab will populate automatically.';
+  document.getElementById('discMini').innerHTML='<div class="b" style="grid-column:1/-1"><div class="l">Discounts</div><div class="v">Not available</div><div class="s">waiting on a Discount column</div></div>';
+  document.querySelector('#discLineTable tbody').innerHTML='';
+  document.querySelector('#discMoMTable thead').innerHTML='';
+  document.querySelector('#discMoMTable tbody').innerHTML='';
+  ['discMix','discTrend','discStack'].forEach(destroy);
+  var el=document.getElementById('discSrc');if(el)el.textContent=msg;
+  var h=document.getElementById('discHint');if(h)h.textContent='no discount data';
+}
+function renderDiscounts(pk,periods){
+  if(!document.getElementById('discMini'))return;
+  if(!hasDiscountData()){discEmpty();return;}
+  var idx=periods.indexOf(pk),prevPk=idx>0?periods[idx-1]:null;
+  var cur=discAgg(rowsInPeriod(pk)),prev=prevPk?discAgg(rowsInPeriod(prevPk)):null;
+  var lab=mode==='month'?'vs prior month':'vs prior week';
+  var gross=cur.tot.net+cur.tot.disc;
+  var dDisc=prev?delta(cur.tot.disc,prev.tot.disc):{t:'\u2014',c:'flat'};
+  var dRate=prev?delta(discRate(cur.tot),discRate(prev.tot),true):{t:'\u2014',c:'flat'};
+  var cards=[
+    ['Discounts',fmt0(cur.tot.disc),'<span class="'+dDisc.c+'">'+dDisc.t+'</span> '+lab],
+    ['Discount Rate',fmtP(discRate(cur.tot)),'<span class="'+dRate.c+'">'+dRate.t+'</span> '+lab],
+    ['Gross Revenue',fmt0(gross),'before discounts'],
+    ['Net Revenue',fmt0(cur.tot.net),'Total Due on the Invoice tab'],
+    ['Discounted Items',fmtN(cur.tot.n),'invoice lines with a discount'],
+    ['Avg Discount per Item',fmt0(cur.tot.n?cur.tot.disc/cur.tot.n:0),'discounted lines only']
+  ];
+  document.getElementById('discMini').innerHTML=cards.map(function(c){
+    return '<div class="b"><div class="l">'+c[0]+'</div><div class="v">'+c[1]+'</div><div class="s">'+c[2]+'</div></div>';
+  }).join('');
+  document.getElementById('discHint').textContent=periodTitle(pk);
+  document.getElementById('discLineHint').textContent=periodTitle(pk);
+  var srcEl=document.getElementById('discSrc');
+  if(srcEl)srcEl.textContent='Source: Discount column on the Invoice tab. Revenue reported everywhere else on this dashboard is net of discounts, so gross revenue here is rebuilt as Total Due plus the discount on the same line.';
+
+  var body='';
+  LINES.forEach(function(l){
+    var x=cur.lines[l];if(!x||(!x.disc&&!x.net))return;
+    var p=prev&&prev.lines[l]?prev.lines[l].disc:0;
+    var ch=p?delta(x.disc,p):{t:'\u2014',c:'flat'};
+    var rate=discRate(x);
+    var cls=rate<=0.05?'g':(rate<=0.12?'w':'b');
+    body+='<tr><td>'+l+'</td><td>'+fmt0(x.net+x.disc)+'</td><td>'+fmt0(x.disc)+
+      '</td><td class="mg"><span class="pill '+cls+'">'+fmtP(rate)+'</span></td><td>'+fmt0(x.net)+
+      '</td><td>'+fmtN(x.n)+'</td><td>'+fmt0(p)+'</td><td class="'+ch.c+'">'+ch.t+'</td></tr>';
+  });
+  var pt=prev?prev.tot.disc:0,tch=pt?delta(cur.tot.disc,pt):{t:'\u2014',c:'flat'};
+  body+='<tr class="tot"><td>Total</td><td>'+fmt0(gross)+'</td><td>'+fmt0(cur.tot.disc)+
+    '</td><td>'+fmtP(discRate(cur.tot))+'</td><td>'+fmt0(cur.tot.net)+'</td><td>'+fmtN(cur.tot.n)+
+    '</td><td>'+fmt0(pt)+'</td><td class="'+tch.c+'">'+tch.t+'</td></tr>';
+  document.querySelector('#discLineTable tbody').innerHTML=body;
+
+  destroy('discMix');
+  var ks=LINES.filter(function(l){return cur.lines[l]&&cur.lines[l].disc>0;});
+  charts.discMix=new Chart(document.getElementById('discMixChart'),{
+    type:'doughnut',
+    data:{labels:ks,datasets:[{data:ks.map(function(l){return Math.round(cur.lines[l].disc);}),
+      backgroundColor:ks.map(function(l,i){return COL.lines[l]||COL.ring[i%COL.ring.length];}),borderWidth:2,borderColor:'#fff'}]},
+    options:{responsive:true,plugins:{legend:{position:'right',labels:{boxWidth:12,font:{size:11}}},
+      tooltip:{callbacks:{label:function(c){return c.label+': '+fmt0(c.raw);}}}}}
+  });
+  renderDiscMonthly();
+}
+function renderDiscMonthly(){
+  if(!document.getElementById('discTrendChart'))return;
+  if(!hasDiscountData())return;
+  var s=discSeries(monthKey),keys=s.keys.slice(-18);
+  destroy('discTrend');
+  charts.discTrend=new Chart(document.getElementById('discTrendChart'),{
+    data:{labels:keys.map(monthLabel),datasets:[
+      {type:'bar',label:'Discounts $',data:keys.map(function(k){return Math.round(s.g[k].disc);}),backgroundColor:COL.bad,yAxisID:'y'},
+      {type:'line',label:'Discount Rate %',data:keys.map(function(k){return +(discRate(s.g[k])*100).toFixed(2);}),
+       borderColor:COL.gp,yAxisID:'y1',tension:.3,pointRadius:3}
+    ]},
+    options:{responsive:true,interaction:{mode:'index',intersect:false},
+      plugins:{legend:{labels:{boxWidth:12,font:{size:11}}},
+        tooltip:{callbacks:{label:function(c){return c.dataset.label+': '+(c.datasetIndex===0?fmt0(c.raw):c.raw+'%');}}}},
+      scales:{y:{ticks:{callback:function(v){return '$'+(v/1000)+'k';}}},
+        y1:{position:'right',grid:{drawOnChartArea:false},beginAtZero:true,ticks:{callback:function(v){return v+'%';}}}}}
+  });
+  destroy('discStack');
+  charts.discStack=new Chart(document.getElementById('discStackChart'),{
+    type:'bar',
+    data:{labels:keys.map(monthLabel),datasets:LINES.map(function(l){
+      return {label:l,data:keys.map(function(k){return Math.round(s.g[k].lines[l]||0);}),
+        backgroundColor:COL.lines[l]||COL.ring[0]};
+    })},
+    options:{responsive:true,plugins:{legend:{labels:{boxWidth:12,font:{size:11}}},
+      tooltip:{callbacks:{label:function(c){return c.dataset.label+': '+fmt0(c.raw);}}}},
+      scales:{x:{stacked:true},y:{stacked:true,ticks:{callback:function(v){return '$'+(v/1000)+'k';}}}}}
+  });
+  var mk=keys.slice(-12);
+  var head='<tr><th>Line</th>'+mk.map(function(k){return '<th>'+monthLabel(k)+'</th>';}).join('')+'<th>Total</th></tr>';
+  var rows='';
+  LINES.forEach(function(l){
+    var t=0,cells='';
+    mk.forEach(function(k){
+      var d=s.g[k].lines[l]||0;t+=d;
+      cells+='<td>'+fmt0(d)+'</td>';
+    });
+    if(!t)return;
+    rows+='<tr><td>'+l+'</td>'+cells+'<td>'+fmt0(t)+'</td></tr>';
+  });
+  var tt=0,tcells='';
+  mk.forEach(function(k){tt+=s.g[k].disc;tcells+='<td>'+fmt0(s.g[k].disc)+'</td>';});
+  rows+='<tr class="tot"><td>Total Discounts</td>'+tcells+'<td>'+fmt0(tt)+'</td></tr>';
+  var rcells='';
+  mk.forEach(function(k){rcells+='<td>'+fmtP(discRate(s.g[k]))+'</td>';});
+  rows+='<tr class="grp"><td>Discount Rate</td>'+rcells+'<td></td></tr>';
+  document.querySelector('#discMoMTable thead').innerHTML=head;
+  document.querySelector('#discMoMTable tbody').innerHTML=rows;
+}
+
 /* =============== Controls =============== */
 function fillPeriods(){
   var ps=periodsList(),sel=document.getElementById('periodSel');
@@ -876,7 +1100,10 @@ function refresh(){
   renderLineChart(m);
   renderToxDet(pk);renderInj(pk);renderEsth(pk);renderWellness(pk);renderOther(pk);
   renderEmployees(pk);
-  renderToxPeriod(pk);renderPaySvc();renderMemSpend();
+  try{renderToxPeriod(pk);}catch(e){memErr("selected period activity",e);}
+  try{renderPaySvc();}catch(e){memErr("payments vs services chart",e);}
+  try{renderMemSpend();}catch(e){memErr("member spend chart",e);}
+  try{renderDiscounts(pk,ps);}catch(e){/* chart library not ready */}
   renderNuda(pk);
   var t=periodTitle(pk);
   document.getElementById('lineHint').textContent=t;
@@ -894,7 +1121,12 @@ function refresh(){
 }
 function fullRender(){
   fillPeriods();refresh();
-  renderToxMini();renderToxMonTable();renderMemChart();renderToxEcon();
+  MEMERR=[];
+  try{renderToxMini();}catch(e){memErr("membership status",e);}
+  try{renderToxMonTable();}catch(e){memErr("tox monthly summary",e);}
+  try{renderMemChart();}catch(e){memErr("new members vs cancellations chart",e);}
+  try{renderToxEcon();}catch(e){memErr("tox membership economics chart",e);}
+  try{renderDiscMonthly();}catch(e){/* chart library not ready */}
   renderWeekChart();renderMonthLine();renderCompareFilters();renderCompare();
   renderNudaChart();renderQBO();renderLoc();
   document.getElementById('subLine').textContent='Denver · data through '+DB.asof+' · Source: COGS Dashboard DEN workbook, Invoice tab';
@@ -1259,6 +1491,21 @@ function ingestArrays(get){
     var preview=hd.filter(function(h){return h;}).slice(0,8).join(' | ')||'(empty)';
     throw new Error('Invoice tab is missing expected columns. First row received: ['+preview+'] with '+(arr.length-1)+' data rows. If these headers look like a different tab, the sheet tab may not be named exactly "Invoice".');
   }
+  /* Discount column: accept the common header spellings, then fall back to any
+     header containing "discount" that is not a rate, code or reason field. */
+  var iDS=-1;
+  ['Discount','Discounts','Discount Amount','Discount $','Discount Total','Total Discount','Discount Applied','Disc'].forEach(function(n){
+    if(iDS<0){var k=col(n);if(k>=0)iDS=k;}
+  });
+  if(iDS<0){
+    for(var hi=0;hi<hd.length;hi++){
+      var hl=hd[hi].toLowerCase();
+      if(hl.indexOf('discount')<0)continue;
+      if(hl.indexOf('%')>=0||hl.indexOf('percent')>=0||hl.indexOf('rate')>=0)continue;
+      if(hl.indexOf('code')>=0||hl.indexOf('reason')>=0||hl.indexOf('name')>=0||hl.indexOf('type')>=0)continue;
+      iDS=hi;break;
+    }
+  }
   var rows=[],maxD='';
   for(var r=1;r<arr.length;r++){
     var row=arr[r]||[],d=xlDate(row[iD]);if(!d)continue;
@@ -1277,6 +1524,7 @@ function ingestArrays(get){
     var newtm=iNT>=0&&toNum(row[iNT])===1?1:0;
     rows.push([d,String(row[iI]||''),staff,o,clean(row[iS]),clean(row[iST]),clean(row[iSU]),
       nuda,isNaN(tmv)?0:1,cat,newtm,rev,sc,wc,toNum(row[iQ]),nuda?nudaCatOf(name):'',iTX>=0?toNum(row[iTX]):0,iCID>=0?String(row[iCID]||'').trim():'']);
+    rows[rows.length-1][C.disc]=iDS>=0?Math.abs(toNum(row[iDS])):0;
     if(d>maxD)maxD=d;
   }
   DB.invoice=rows;DB.asof=maxD;
@@ -1318,79 +1566,107 @@ function ingestArrays(get){
   if(pa){var pp=parsePnl(pa);if(pp)DB.pnl=pp;}
   var ma=get('Membership Tracker');
   if(ma){
-    /* Locate the header row and map columns by name instead of fixed
-       positions, so the parser survives column moves in the sheet. */
-    var hr=-1,hdr=null;
+    /* Column mapping for the Membership Tracker.
+       Header text only nominates candidates; a candidate is used only if the
+       column actually holds the right kind of value. That keeps a look alike
+       header such as Cancellation Reason or Payment Status from displacing the
+       real column. If nothing validates, the original fixed positions are used,
+       so this can never read worse than reading by position alone. */
+    var FIXED={status:6,start:3,cancel:5,newcust:2,pay:8,paid:9};
+    var hr=-1;
     for(var i3=0;i3<Math.min(ma.length,10);i3++){
-      var row3=ma[i3]||[];
-      var hasCid=false,hasStatus=false;
-      for(var c3=0;c3<row3.length;c3++){
-        var h3=String(row3[c3]||'').trim().toLowerCase();
-        if(h3==='cid')hasCid=true;
-        if(h3.indexOf('status')>=0||h3==='satus')hasStatus=true;
+      var h0=ma[i3]||[];
+      for(var c0=0;c0<h0.length;c0++){
+        if(String(h0[c0]==null?'':h0[c0]).trim().toUpperCase()==='CID'){hr=i3;break;}
       }
-      if(hasCid||hasStatus){hr=i3;hdr=row3;break;}
+      if(hr>=0)break;
     }
-    function findCol(patterns,fallback){
-      if(!hdr)return fallback;
-      for(var p=0;p<patterns.length;p++){
-        for(var c=0;c<hdr.length;c++){
-          var h=String(hdr[c]||'').trim().toLowerCase();
-          if(h&&patterns[p].test(h))return c;
+    var mh=hr>=0?(ma[hr]||[]).map(function(v){return String(v==null?'':v).trim().toLowerCase();}):[];
+    var firstRow=hr>=0?hr+1:0,data=[];
+    for(var r3=firstRow;r3<ma.length;r3++){
+      var mr=ma[r3];if(!mr||mr[0]==null||mr[0]==='')continue;
+      /* When the CID marker was dropped by gviz typing, keep only rows whose
+         first cell is numeric (a client ID). */
+      if(hr<0&&!isFinite(parseFloat(mr[0])))continue;
+      data.push(mr);
+    }
+    var width=0;data.forEach(function(mr){if(mr.length>width)width=mr.length;});
+    if(width<10)width=10;
+    var SW=['active','renew','pending','cancel','paused','expired','hold','comped','frozen'];
+    function looksStatus(v){
+      if(v instanceof Date)return false;
+      var s=String(v==null?'':v).trim().toLowerCase();
+      if(!s||s.length>30||isFinite(parseFloat(s)))return false;
+      if(s==='status'||s==='satus')return false;
+      for(var i=0;i<SW.length;i++){if(s.indexOf(SW[i])>=0)return true;}
+      return false;
+    }
+    function looksDate(v){
+      try{return xlDate(v)!=null;}catch(e){return false;}
+    }
+    /* quality of a column: how many cells pass, and what share of the non blank
+       cells pass */
+    function quality(ix,test){
+      var nb=0,ok=0;
+      for(var i=0;i<data.length;i++){
+        var v=data[i][ix];
+        if(v==null||v==='')continue;
+        nb++;if(test(v))ok++;
+      }
+      return {nb:nb,ok:ok,share:nb?ok/nb:0};
+    }
+    function headerCands(test){
+      var out=[];
+      for(var k=0;k<mh.length;k++){if(mh[k]&&test(mh[k]))out.push(k);}
+      return out;
+    }
+    /* accept(ix) decides whether a column is good enough for the field */
+    function resolve(cands,fixed,test,accept,scan){
+      var list=cands.concat([fixed]),i;
+      for(i=0;i<list.length;i++){
+        var ix=list[i];
+        if(ix==null||ix<0)continue;
+        if(accept(quality(ix,test)))return {col:ix,how:(i<cands.length?'header':'position')};
+      }
+      if(scan){
+        var best=-1,bestOk=0;
+        for(i=0;i<width;i++){
+          var q=quality(i,test);
+          if(accept(q)&&q.ok>bestOk){bestOk=q.ok;best=i;}
         }
+        if(best>=0)return {col:best,how:'scan'};
       }
-      return fallback;
+      return {col:fixed,how:'default'};
     }
-    var cCid=findCol([/^cid$/],0);
-    var cNew=findCol([/new/],2);
-    var cStart=findCol([/start|join|sign/],3);
-    var cCancel=findCol([/cancel/],5);
-    var cStatus=findCol([/^sta?tus$/,/status/],6);
-    var cPay=findCol([/2026.*(pay|#)|(pay|#).*2026|# of pay/],8);
-    var cPaid=findCol([/paid|total.*2026|2026.*total/],9);
-    /* Content based detection overrides everything: scan every column and
-       pick the one whose cells look like membership statuses. This works even
-       if headers are missing, renamed, or columns were moved. */
-    var start=hr>=0?hr+1:0;
-    var ncols=0;
-    for(var rr=start;rr<Math.min(ma.length,start+400);rr++){if(ma[rr]&&ma[rr].length>ncols)ncols=ma[rr].length;}
-    var best=-1,bestScore=0;
-    for(var cc=0;cc<ncols;cc++){
-      var score=0;
-      for(var rr2=start;rr2<Math.min(ma.length,start+400);rr2++){
-        var cell=ma[rr2]?ma[rr2][cc]:null;
-        if(cell==null)continue;
-        var sv=String(cell).toLowerCase();
-        if(/active|cancel|renew|pending|paused|frozen|expired/.test(sv))score++;
-      }
-      if(score>bestScore){bestScore=score;best=cc;}
-    }
-    if(best>=0&&bestScore>=3)cStatus=best;
-    /* Cancel date column: prefer the header match; otherwise take a mostly
-       blank date column to the right of the start column. */
-    function looksDate(v){return v instanceof Date||/^\d{4}-\d{2}-\d{2}/.test(String(v||''))||/^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(String(v||''));}
-    if(hdr){
-      var hdrCancel=findCol([/cancel/],-1);
-      if(hdrCancel>=0)cCancel=hdrCancel;
-    }
+    var n=data.length||1;
+    var rStatus=resolve(
+      headerCands(function(h){return h==='status'||h==='satus'||(h.indexOf('status')>=0&&h.indexOf('payment')<0&&h.indexOf('invoice')<0&&h.indexOf('note')<0&&h.indexOf('reason')<0)||h.indexOf('satus')>=0;}),
+      FIXED.status,looksStatus,
+      function(q){return q.ok>=Math.max(2,n*0.2)&&q.share>=0.6;},true);
+    var rStart=resolve(
+      headerCands(function(h){return h.indexOf('start')>=0;}),
+      FIXED.start,looksDate,
+      function(q){return q.ok>=Math.max(2,n*0.4)&&q.share>=0.8;},false);
+    var rCancel=resolve(
+      headerCands(function(h){return h.indexOf('cancel')>=0&&h.indexOf('reason')<0&&h.indexOf('note')<0&&h.indexOf('why')<0;}),
+      FIXED.cancel,looksDate,
+      function(q){return q.ok>=1&&q.share>=0.6;},false);
+    var rNew=resolve(
+      headerCands(function(h){return h.indexOf('new customer')>=0||h.indexOf('new client')>=0;}),
+      FIXED.newcust,function(){return true;},function(){return true;},false);
+    var MI={status:rStatus.col,start:rStart.col,cancel:rCancel.col,newcust:rNew.col,pay:FIXED.pay,paid:FIXED.paid};
     var mem=[];
-    var stCount={};
-    for(var r3=start;r3<ma.length;r3++){
-      var mr=ma[r3];if(!mr)continue;
-      var st6=String(mr[cStatus]||'').trim();
-      var startD=xlDate(mr[cStart]);
-      /* Keep the row if it has either a status or a start date; do not
-         require a CID so the parse survives CID column moves. */
-      if(!st6&&!startD)continue;
-      if(st6==='Satus'||st6==='Status')continue;
-      mem.push([st6,startD,xlDate(mr[cCancel]),String(mr[cNew]||'').trim(),toNum(mr[cPay]),toNum(mr[cPaid])]);
-      if(st6)stCount[st6]=(stCount[st6]||0)+1;
+    for(var d3=0;d3<data.length;d3++){
+      var row3=data[d3];
+      var stv=String(row3[MI.status]==null?'':row3[MI.status]).trim();
+      if(stv==='Satus'||stv==='Status')continue;
+      mem.push([stv,xlDate(row3[MI.start]),xlDate(row3[MI.cancel]),
+        String(row3[MI.newcust]==null?'':row3[MI.newcust]).trim(),
+        toNum(row3[MI.pay]),toNum(row3[MI.paid])]);
     }
+    DB.memdiag={rows:mem.length,header:hr,
+      map:{status:{col:MI.status,how:rStatus.how},start:{col:MI.start,how:rStart.how},cancel:{col:MI.cancel,how:rCancel.how}}};
     if(mem.length)DB.members=mem;
-    /* Diagnostics, shown in the sync status line so parsing issues are visible. */
-    var topSt=Object.keys(stCount).sort(function(a,b){return stCount[b]-stCount[a];}).slice(0,4)
-      .map(function(k){return k+':'+stCount[k];}).join(', ');
-    DB.trackerDiag='tracker '+mem.length+' rows, status col '+(cStatus+1)+(hr>=0?', header row '+(hr+1):', no header')+(topSt?(' \u00b7 '+topSt):' \u00b7 no statuses found');
   }
 }
 
@@ -1556,7 +1832,7 @@ function syncFromSheet(){
     if(lines.length<=2&&DB.invoice.length>50){
       warn=' \u00b7 Warning: the synced Invoice only contains '+lines.join(', ')+' rows. If the Invoice tab in the Google Sheet has an active filter, gviz only returns the visible rows \u2014 remove the filter and sync again.';
     }
-    setStatus('Synced from Google Sheets \u00b7 '+DB.invoice.length+' invoice rows'+(DB.trackerDiag?(' \u00b7 '+DB.trackerDiag):'')+' \u00b7 '+new Date().toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})+warn,!!warn);
+    setStatus('Synced from Google Sheets \u00b7 '+DB.invoice.length+' invoice rows \u00b7 '+new Date().toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})+warn,!!warn);
   }).catch(function(err){
     setStatus('Sync failed: '+err.message,true);
   });
