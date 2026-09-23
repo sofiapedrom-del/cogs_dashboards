@@ -487,25 +487,51 @@ function renderLineSummary(pk){
   });
   var pi=(mode==='month')?pnlIdx(pk):-1;
   var DL={'Injectables':'52100','Esthetician':'52200','Wellness':'52300'};
-  /* Wellness COGS comes from the P&L - QBO tab (50400 COGS Wellness + 50500 COGS Nuda,
-     since Nuda sits inside the Wellness line). Monthly view only; the weekly view keeps
-     the Invoice tab COGS because the P&L is monthly. */
+  var WCOGS=['50400','50500'];
+  /* P&L based amounts (direct labor, Wellness COGS) are monthly. A month that is in
+     the P&L - QBO tab uses the actual amount. A week gets the month's amount allocated
+     by its share of that line's Net Sales. A month not yet in the P&L uses the latest
+     P&L month's ratio to Net Sales and is flagged as an estimate. */
+  var plEst=false,plAlloc=(mode!=='month'),estMonth='';
+  function hasAcct(codes){return !!DB.pnl&&codes.some(function(c){return !!DB.pnl.acct[c];});}
+  function sumAcct(codes,i){var s=0;codes.forEach(function(c){s+=pnlVal(c,i);});return s;}
+  var netCache={};
+  function lineNetMonth(l,mk){
+    var k=l+'|'+mk;if(netCache[k]!=null)return netCache[k];
+    var s=0;DB.invoice.forEach(function(r){if(monthKey(r[C.date])===mk&&jeLineOf(r)===l)s+=r[C.rev]-(r[C.tax]||0);});
+    return netCache[k]=s;
+  }
+  function lastPnlIdx(codes,l){
+    if(!DB.pnl)return -1;
+    for(var i=DB.pnl.months.length-1;i>=0;i--){if(sumAcct(codes,i)&&lineNetMonth(l,DB.pnl.months[i]))return i;}
+    return -1;
+  }
+  function plAmount(codes,l){
+    if(!hasAcct(codes))return null;
+    if(pi>=0)return sumAcct(codes,pi);
+    var byMonth={};
+    rows.forEach(function(r){if(jeLineOf(r)!==l)return;var mk=monthKey(r[C.date]);byMonth[mk]=(byMonth[mk]||0)+r[C.rev]-(r[C.tax]||0);});
+    var tot=0,any=false;
+    Object.keys(byMonth).forEach(function(mk){
+      var i=pnlIdx(mk),base=i>=0?lineNetMonth(l,mk):0;
+      if(!base){i=lastPnlIdx(codes,l);if(i<0)return;plEst=true;estMonth=DB.pnl.months[i];base=lineNetMonth(l,estMonth);}
+      if(!base)return;
+      tot+=byMonth[mk]*sumAcct(codes,i)/base;any=true;
+    });
+    return any?tot:null;
+  }
   var wellQbo=false;
-  if(pi>=0&&m['Wellness']&&DB.pnl&&(DB.pnl.acct['50400']||DB.pnl.acct['50500'])){
-    m['Wellness'].c=pnlVal('50400',pi)+pnlVal('50500',pi);
-    m['Wellness'].qbo=wellQbo=true;
+  if(m['Wellness']){
+    var wc=plAmount(WCOGS,'Wellness');
+    if(wc!=null){m['Wellness'].c=wc;m['Wellness'].qbo=wellQbo=true;}
   }
-  function dlOf(l){
-    if(pi<0||!DL[l])return null;
-    var a=DB.pnl&&DB.pnl.acct[DL[l]];
-    return a?pnlVal(DL[l],pi):null;
-  }
+  function dlOf(l){return DL[l]?plAmount([DL[l]],l):null;}
   function row(label,x,dl,cls,indent){
     var gm=x.rev-x.c,gpm=x.rev?gm/x.rev:0,ic=Object.keys(x.inv).length;
     var dlTxt='',glTxt='';
     if(dl!=null){
       var gl=x.rev?(gm-dl)/x.rev:0;
-      dlTxt=fmt0(dl);glTxt='<span class="pill '+pillCls(gl)+'">'+fmtP(gl)+'</span>';
+      dlTxt=fmt0(dl)+(plEst?'\u2020':'');glTxt='<span class="pill '+pillCls(gl)+'">'+fmtP(gl)+'</span>';
     }
     var disc=x.disc?'<span class="down">('+fmt0(x.disc)+')</span>':'—';
     var gpTxt=x.rev?'<span class="pill '+pillCls(gpm)+'">'+fmtP(gpm)+'</span>':'—';
@@ -533,10 +559,10 @@ function renderLineSummary(pk){
     'COGS = Service COGS + Wellness COGS from the Invoice tab, except Wellness (see below). '+
     'Injectables = Tox Membership and Injectables; Esthetician = Esthetician service (includes BH Membership) and retail products; '+
     'Wellness = Weight Loss, Wellness and Nuda memberships, Nuda consultations, HRT and prescriptions; Other = deposits, fees and gift cards.';
-  txt+=(pi>=0)?' Direct labor comes from the P&L − QBO tab (52100 Injectables, 52200 Esthetician, 52300 Wellness); lines without a labor account are left blank.'
-    :' Direct labor is shown in the monthly view only, because the P&L − QBO tab is monthly.';
-  txt+=wellQbo?' *Wellness COGS comes from the P&L \u2212 QBO tab (50400 COGS Wellness + 50500 COGS Nuda), so it is shown at line level only.'
-    :' Wellness COGS comes from the P&L \u2212 QBO tab in the monthly view; the weekly view uses the Invoice tab.';
+  txt+=' Direct labor comes from the P&L \u2212 QBO tab (52100 Injectables, 52200 Esthetician, 52300 Wellness); lines without a labor account are left blank.';
+  txt+=wellQbo?' *Wellness COGS comes from the P&L \u2212 QBO tab (50400 COGS Wellness + 50500 COGS Nuda), so it is shown at line level only.':'';
+  if(plAlloc)txt+=' Weekly view: each month\'s P&L labor and Wellness COGS are allocated to the week by its share of that line\'s Net Sales.';
+  if(plEst)txt+=' \u2020 Estimate: this period is not in the P&L \u2212 QBO tab yet, so labor and Wellness COGS use the '+monthLabel(estMonth)+' ratio to Net Sales until the month is closed.';
   if(!hasDiscountData())txt+=' Discount data has not loaded yet, sync the Google Sheet to populate the Discounts column.';
   var el=document.getElementById('lineSrc');if(el)el.textContent=txt;
   return m;
