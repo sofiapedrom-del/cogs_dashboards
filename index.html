@@ -52,6 +52,7 @@
   th{font-size:10.5px;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);font-weight:600}
   tr.tot td{font-weight:700;border-top:2px solid var(--ink);border-bottom:none}
   tr.grp td{font-weight:650;background:#faf7f4}
+  tr.note td{font-size:12px}
   td.indent{padding-left:24px;color:#5a534d}
   .mg{font-weight:600}
   .pill{display:inline-block;padding:1px 7px;border-radius:20px;font-size:11px;font-weight:600}
@@ -106,14 +107,14 @@
   <section class="tab on" id="tabRev">
     <div class="kpis" id="kpis"></div>
 
-    <div class="grid g2">
-      <div class="card">
+    <div class="grid" style="grid-template-columns:1fr">
+      <div class="card" style="overflow-x:auto">
         <h2>Service Line Summary <span class="hint" id="lineHint"></span></h2>
         <table id="lineTable">
-          <thead><tr><th>Line</th><th>Revenue</th><th>Total COGS</th><th>GM $</th><th>GP %</th><th>Direct Labor</th><th>GP % incl Labor</th><th>Invoices</th></tr></thead>
+          <thead><tr><th>Line</th><th>Sales</th><th>Discounts</th><th>Net Sales</th><th>COGS</th><th>GM $</th><th>GP %</th><th>Direct Labor</th><th>GP % incl Labor</th><th>Invoices</th></tr></thead>
           <tbody></tbody>
         </table>
-        <div class="src" id="lineSrc">Lines follow the workbook taxonomy: Tox = rows classified in the Category helper column, Injectables = non Tox injectables, Esthetician includes retail products, Wellness includes prescriptions, Other = gift cards, deposits and fees.</div>
+        <div class="src" id="lineSrc">Follows the Journal Entries tab methodology.</div>
       </div>
       <div class="card">
         <h2>Revenue Mix <span class="hint" id="donutHint"></span></h2>
@@ -376,15 +377,46 @@ function sundayKey(s){var d=parseDate(s);d.setDate(d.getDate()-d.getDay());retur
 function monthLabel(k){var p=k.split('-');return new Date(p[0],p[1]-1,1).toLocaleDateString('en-US',{month:'short',year:'numeric'});}
 function weekLabel(k){return parseDate(k).toLocaleDateString('en-US',{month:'short',day:'numeric'});}
 
-/* ---- Line classification aligned to the workbook taxonomy ---- */
-function lineOf(r){
-  if(r[C.cat])return 'Tox';
+/* ---- Line classification: Journal Entries methodology ----
+   Same rules as the Journal Entries tab that drives the QBO revenue entry:
+   S/P = Product goes to Esthetician (Product), S/P = Wellness goes to Wellness
+   (Prescription), otherwise the Service column decides the line. */
+function jeLineOf(r){
   var sv=String(r[C.svc]==null?'':r[C.svc]).trim().toLowerCase();
   var oo=String(r[C.o]==null?'':r[C.o]).trim().toLowerCase();
-  if(oo==='wellness'||sv==='wellness')return 'Wellness';
-  if(sv==='esthetician'||oo==='product')return 'Esthetician';
+  if(oo==='product')return 'Esthetician';
+  if(oo==='wellness')return 'Wellness';
   if(sv==='injectables')return 'Injectables';
+  if(sv==='esthetician')return 'Esthetician';
+  if(sv==='wellness')return 'Wellness';
   return 'Other';
+}
+function jeColOf(r){
+  var sv=String(r[C.svc]==null?'':r[C.svc]).trim().toLowerCase();
+  var oo=String(r[C.o]==null?'':r[C.o]).trim().toLowerCase();
+  var st=String(r[C.styp]==null?'':r[C.styp]).trim();
+  if(oo==='product')return 'Product';
+  if(oo==='wellness')return 'Prescription';
+  if(sv==='injectables')return st.toLowerCase()==='tox membership'?'Tox Membership':'Injectables';
+  if(sv==='esthetician')return 'Esthetician';
+  if(sv==='wellness'){
+    for(var i=0;i<JE_COLS.Wellness.length;i++){if(JE_COLS.Wellness[i].toLowerCase()===st.toLowerCase())return JE_COLS.Wellness[i];}
+    return st||'Other Wellness';
+  }
+  if(sv==='deposit')return 'Deposit';
+  if(sv==='gift card')return 'Gift Card';
+  return 'Other';
+}
+var JE_LINES=['Injectables','Esthetician','Wellness','Other'];
+var JE_COLS={'Injectables':['Tox Membership','Injectables'],
+  'Esthetician':['Esthetician','Product'],
+  'Wellness':['Weight Loss Membership','Wellness Membership','Nuda Membership','Nuda Consultation','HRT','Prescription'],
+  'Other':['Deposit','Other','Gift Card']};
+/* Tox (Category helper column) is kept as its own line for the Tox, Trends and
+   Employee views; every other row uses the Journal Entries line. */
+function lineOf(r){
+  if(r[C.cat])return 'Tox';
+  return jeLineOf(r);
 }
 var LINES=['Tox','Injectables','Esthetician','Wellness','Other'];
 
@@ -439,57 +471,74 @@ function renderKPIs(pk,periods){
 function pnlIdx(mk){return DB.pnl?DB.pnl.months.indexOf(mk):-1;}
 function pnlVal(code,i){var a=DB.pnl&&DB.pnl.acct[code];return (a&&i>=0&&a.vals[i]!=null)?a.vals[i]:0;}
 function renderLineSummary(pk){
+  /* Journal Entries methodology (Journal Entries tab of the COGS Dashboard):
+     Sales = Total Due + Discounts - Tax, Discounts in their own column,
+     Net Sales = Sales - Discounts. COGS = Service COGS + Wellness COGS from the
+     Invoice tab. Direct labor comes from the P&L - QBO tab (monthly view). */
   var rows=rowsInPeriod(pk),m={};
+  function blank(){return {gross:0,disc:0,rev:0,c:0,inv:{},n:0};}
+  function add(x,r,net,d){x.gross+=net+d;x.disc+=d;x.rev+=net;x.c+=r[C.sc]+r[C.wc];x.n++;if(r[C.inv])x.inv[r[C.inv]]=1;}
   rows.forEach(function(r){
-    var l=lineOf(r);
-    m[l]=m[l]||{rev:0,c:0,inv:{}};
-    m[l].rev+=r[C.rev];m[l].c+=r[C.sc]+r[C.wc];if(r[C.inv])m[l].inv[r[C.inv]]=1;
+    var l=jeLineOf(r),k=jeColOf(r);
+    var net=r[C.rev]-(r[C.tax]||0),d=discOf(r);
+    m[l]=m[l]||blank();m[l].cols=m[l].cols||{};
+    add(m[l],r,net,d);
+    m[l].cols[k]=m[l].cols[k]||blank();add(m[l].cols[k],r,net,d);
   });
   var pi=(mode==='month')?pnlIdx(pk):-1;
-  var wellNote='',laborNote='';
-  if(pi>=0&&m['Wellness']){
-    m['Wellness'].c=pnlVal('50400',pi);
-    m['Wellness'].qbo=1;
-    wellNote=' Wellness COGS comes from QBO account 50400 in the P&L extract, because its cost structure is booked directly in QBO rather than per invoice.';
+  var DL={'Injectables':'52100','Esthetician':'52200','Wellness':'52300'};
+  /* Wellness COGS comes from the P&L - QBO tab (50400 COGS Wellness + 50500 COGS Nuda,
+     since Nuda sits inside the Wellness line). Monthly view only; the weekly view keeps
+     the Invoice tab COGS because the P&L is monthly. */
+  var wellQbo=false;
+  if(pi>=0&&m['Wellness']&&DB.pnl&&(DB.pnl.acct['50400']||DB.pnl.acct['50500'])){
+    m['Wellness'].c=pnlVal('50400',pi)+pnlVal('50500',pi);
+    m['Wellness'].qbo=wellQbo=true;
   }
-  /* Injectables group: Tox shown as a breakdown inside Injectables */
-  var tox=m['Tox']||{rev:0,c:0,inv:{}},oi=m['Injectables']||{rev:0,c:0,inv:{}};
-  var ginv={};Object.keys(tox.inv).forEach(function(k){ginv[k]=1;});Object.keys(oi.inv).forEach(function(k){ginv[k]=1;});
-  var grp={rev:tox.rev+oi.rev,c:tox.c+oi.c,inv:ginv};
-  var DL={grp:'52100','Esthetician':'52200','Wellness':'52300'};
-  var tot={rev:0,c:0,inv:0,dl:0},body='';
-  function rowHtml(label,x,dlCode,indent){
+  function dlOf(l){
+    if(pi<0||!DL[l])return null;
+    var a=DB.pnl&&DB.pnl.acct[DL[l]];
+    return a?pnlVal(DL[l],pi):null;
+  }
+  function row(label,x,dl,cls,indent){
     var gm=x.rev-x.c,gpm=x.rev?gm/x.rev:0,ic=Object.keys(x.inv).length;
-    var dlCell='',glCell='';
-    if(pi>=0&&dlCode){
-      var dl=pnlVal(dlCode,pi);tot.dl+=dl;
-      var gl=x.rev?(x.rev-x.c-dl)/x.rev:0;
-      dlCell=fmt0(dl);
-      glCell='<span class="pill '+pillCls(gl)+'">'+fmtP(gl)+'</span>';
+    var dlTxt='',glTxt='';
+    if(dl!=null){
+      var gl=x.rev?(gm-dl)/x.rev:0;
+      dlTxt=fmt0(dl);glTxt='<span class="pill '+pillCls(gl)+'">'+fmtP(gl)+'</span>';
     }
-    var td0=indent?'<td class="note" style="padding-left:22px">'+label+'</td>':'<td>'+label+'</td>';
-    return '<tr'+(indent?' class="note"':'')+'>'+td0+'<td>'+fmt0(x.rev)+'</td><td>'+fmt0(x.c)+'</td><td>'+fmt0(gm)+
-      '</td><td class="mg"><span class="pill '+pillCls(gpm)+'">'+fmtP(gpm)+'</span></td><td>'+dlCell+'</td><td class="mg">'+glCell+'</td><td>'+fmtN(ic)+'</td></tr>';
+    var disc=x.disc?'<span class="down">('+fmt0(x.disc)+')</span>':'—';
+    var gpTxt=x.rev?'<span class="pill '+pillCls(gpm)+'">'+fmtP(gpm)+'</span>':'—';
+    return '<tr'+(cls?' class="'+cls+'"':'')+'><td'+(indent?' style="padding-left:22px"':'')+'>'+label+'</td><td>'+fmt0(x.gross)+'</td><td>'+disc+
+      '</td><td>'+fmt0(x.rev)+'</td><td>'+(x.hideC?'':fmt0(x.c))+'</td><td>'+(indent?'':fmt0(gm))+'</td><td class="mg">'+(indent?'':gpTxt)+
+      '</td><td>'+dlTxt+'</td><td class="mg">'+glTxt+'</td><td>'+fmtN(ic)+'</td></tr>';
   }
-  /* parent + breakdown */
-  body+=rowHtml('Injectables (incl Tox)',grp,DL.grp,false);
-  tot.rev+=grp.rev;tot.c+=grp.c;tot.inv+=Object.keys(grp.inv).length;
-  if(tox.rev||tox.c)body+=rowHtml('Tox',tox,null,true);
-  if(oi.rev||oi.c)body+=rowHtml('Other Injectables',oi,null,true);
-  ['Esthetician','Wellness','Other'].forEach(function(l){
-    if(!m[l])return;
-    body+=rowHtml(l+(m[l].qbo?'*':''),m[l],DL[l]||null,false);
-    tot.rev+=m[l].rev;tot.c+=m[l].c;tot.inv+=Object.keys(m[l].inv).length;
+  var tot=blank(),totDl=0,anyDl=false,body='';
+  JE_LINES.forEach(function(l){
+    var x=m[l];if(!x)return;
+    var dl=dlOf(l);if(dl!=null){totDl+=dl;anyDl=true;}
+    body+=row(l+(x.qbo?'*':''),x,dl,'grp',false);
+    var order=(JE_COLS[l]||[]).concat(Object.keys(x.cols).filter(function(k){return (JE_COLS[l]||[]).indexOf(k)<0;}));
+    order.forEach(function(k){
+      var s=x.cols[k];if(!s||(!s.gross&&!s.c))return;
+      if(x.qbo)s.hideC=true;
+      body+=row(k,s,null,'note',true);
+    });
+    tot.gross+=x.gross;tot.disc+=x.disc;tot.rev+=x.rev;tot.c+=x.c;
+    Object.keys(x.inv).forEach(function(i){tot.inv[i]=1;});
   });
-  if(pi>=0)laborNote=' Direct labor comes from QBO accounts 52100, 52200 and 52300. QBO books one labor account for all injectables, so the Injectables group (Tox included) is compared against account 52100.';
-  var tg=tot.rev-tot.c,tgl=tot.rev?(tg-tot.dl)/tot.rev:0;
-  body+='<tr class="tot"><td>Total</td><td>'+fmt0(tot.rev)+'</td><td>'+fmt0(tot.c)+'</td><td>'+fmt0(tg)+
-    '</td><td>'+fmtP(tot.rev?tg/tot.rev:0)+'</td><td>'+(pi>=0?fmt0(tot.dl):'')+'</td><td>'+(pi>=0?fmtP(tgl):'')+'</td><td>'+fmtN(tot.inv)+'</td></tr>';
+  body+=row('Total',tot,anyDl?totDl:null,'tot',false);
   document.querySelector('#lineTable tbody').innerHTML=body;
-  var base='Lines follow the workbook taxonomy: Tox is shown as a breakdown inside Injectables, Esthetician includes retail products, Wellness includes prescriptions, Other = gift cards, deposits and fees.';
-  var extra=(pi>=0)?((m['Wellness']&&m['Wellness'].qbo?' *':'')+wellNote+laborNote):' Direct labor and QBO based Wellness COGS are shown in the monthly view only, because the P&L extract is monthly.';
-  var el=document.getElementById('lineSrc');if(el)el.textContent=base+extra;
-  /* donut still expects the per line map */
+  var txt='Follows the Journal Entries tab: Sales = Total Due + Discounts − Tax, Net Sales = Sales − Discounts, GP % on Net Sales, shown per line because member service costs sit under Injectables while membership payments sit under Tox Membership. '+
+    'COGS = Service COGS + Wellness COGS from the Invoice tab, except Wellness (see below). '+
+    'Injectables = Tox Membership and Injectables; Esthetician = Esthetician service (includes BH Membership) and retail products; '+
+    'Wellness = Weight Loss, Wellness and Nuda memberships, Nuda consultations, HRT and prescriptions; Other = deposits, fees and gift cards.';
+  txt+=(pi>=0)?' Direct labor comes from the P&L − QBO tab (52100 Injectables, 52200 Esthetician, 52300 Wellness); lines without a labor account are left blank.'
+    :' Direct labor is shown in the monthly view only, because the P&L − QBO tab is monthly.';
+  txt+=wellQbo?' *Wellness COGS comes from the P&L \u2212 QBO tab (50400 COGS Wellness + 50500 COGS Nuda), so it is shown at line level only.'
+    :' Wellness COGS comes from the P&L \u2212 QBO tab in the monthly view; the weekly view uses the Invoice tab.';
+  if(!hasDiscountData())txt+=' Discount data has not loaded yet, sync the Google Sheet to populate the Discounts column.';
+  var el=document.getElementById('lineSrc');if(el)el.textContent=txt;
   return m;
 }
 function renderLineChart(m){
@@ -1513,7 +1562,7 @@ function ingestArrays(get){
       var bmk=d.slice(0,7);bhAcc[bmk]=(bhAcc[bmk]||0)+toNum(row[iAM]);
     }
     var rev=toNum(row[iT]),sc=toNum(row[iSC]),wc=toNum(row[iWC]);
-    if(rev===0&&sc===0&&wc===0)continue;
+    if(rev===0&&sc===0&&wc===0&&!(iDS>=0&&toNum(row[iDS])))continue;
     var name=String(row[iSP]||'');
     var o=String(row[iO]||'').trim();o=(['Service','Product','Wellness'].indexOf(o)>=0)?o:'';
     var staff=clean(row[iG])||'(Unassigned)';
